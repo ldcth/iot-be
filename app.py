@@ -7,25 +7,35 @@ import os
 
 app = Flask(__name__)
 
-labels = ['tat_den', 'dong_cua', 'bat_quat', 'bat_den', 'tat_quat', 'mo_cua']
-
-checkpoint_filepath = './best_model_ver3.keras'
+# labels = ['tat_quat', 'mo_cua', 'dong_cua', 'tat_den', 'bat_quat', 'bat_den']
+CLASS_MAPPING = {
+    0: "tat_quat",
+    1: "mo_cua",
+    2: "dong_cua",
+    3: "tat_den",
+    4: "bat_quat",
+    5: "bat_den"
+}
+# checkpoint_filepath = './best_model_ver3.keras'
+checkpoint_filepath = './best_model_ver6.keras'
+# checkpoint_filepath = '/content/drive/MyDrive/Colab Notebooks/IoT/checkpoints/best_model_ver6.keras'
+model = tf.keras.models.load_model(checkpoint_filepath)
 
 UPLOAD_FOLDER = 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-try:
-    # First, verify the file exists
-    if not os.path.exists(checkpoint_filepath):
-        raise FileNotFoundError(f"Model file not found at: {checkpoint_filepath}")
+# try:
+#     # First, verify the file exists
+#     if not os.path.exists(checkpoint_filepath):
+#         raise FileNotFoundError(f"Model file not found at: {checkpoint_filepath}")
     
-    # Try loading the model
-    model = tf.keras.models.load_model(checkpoint_filepath)
-except Exception as e:
-    print(f"Error loading model: {str(e)}")
-    # You might want to exit here or handle the error appropriately
-    raise
+#     # Try loading the model
+#     model = tf.keras.models.load_model(checkpoint_filepath)
+# except Exception as e:
+#     print(f"Error loading model: {str(e)}")
+#     # You might want to exit here or handle the error appropriately
+#     raise
 
 def augment_audio(data, sample_rate):
     augmented_data = [data]
@@ -41,8 +51,22 @@ def augment_audio(data, sample_rate):
     augmented_data.append(amplitude_mod)
     return augmented_data
 
-def preprocess_audio(audio_data, sample_rate):
-    augmented_data = augment_audio(audio_data, sample_rate)
+# def preprocess_audio(audio_data, sample_rate):
+#     augmented_data = augment_audio(audio_data, sample_rate)
+#     features = []
+#     for augmented in augmented_data:
+#         mfccs = np.mean(lr.feature.mfcc(y=augmented, sr=sample_rate).T, axis=0)
+#         mel_spec = np.mean(lr.feature.melspectrogram(y=augmented, sr=sample_rate).T, axis=0)
+#         zcr = np.mean(lr.feature.zero_crossing_rate(y=augmented).T, axis=0)
+#         feature_vector = np.hstack([mfccs, mel_spec, zcr])
+#         features.append(feature_vector)
+#     return np.array(features)
+
+def preprocess_audio(file_path):
+    data, sample_rate = lr.load(file_path, sr=16000)
+
+    augmented_data = augment_audio(data, sample_rate)
+
     features = []
     for augmented in augmented_data:
         mfccs = np.mean(lr.feature.mfcc(y=augmented, sr=sample_rate).T, axis=0)
@@ -50,29 +74,35 @@ def preprocess_audio(audio_data, sample_rate):
         zcr = np.mean(lr.feature.zero_crossing_rate(y=augmented).T, axis=0)
         feature_vector = np.hstack([mfccs, mel_spec, zcr])
         features.append(feature_vector)
+
     return np.array(features)
 
-# @app.route('/classify_audio', methods=['POST'])
 def classify_audio(file_path):
     try:
         print(file_path)
-        # Read audio data directly from file path using librosa
-        audio_array, sample_rate = lr.load(file_path, sr=16000)
-        
-        X_new = preprocess_audio(audio_array, sample_rate)
+        X_new = preprocess_audio(file_path)
+        print(X_new.shape)
+
         X_new = X_new.reshape((X_new.shape[0], X_new.shape[1], 1))
+        print(X_new.shape)
 
         predictions = model.predict(X_new)
-        highest_probability_index = np.argmax(predictions, axis=1)[0]
-        predicted_label = labels[highest_probability_index]
+        print(predictions.shape)
 
-        # Return a dictionary instead of jsonify response
+        average_prediction = np.mean(predictions, axis=0)
+        print(average_prediction)
+        predicted_label = np.argmax(average_prediction)
+        print(predicted_label)
+        predicted_percentage = average_prediction[predicted_label] * 100
+        print(f"Nhãn dự đoán: {CLASS_MAPPING[predicted_label]} ({predicted_label}) với xác suất: {predicted_percentage:.2f}%")
         return {
-            "transcript": predicted_label,
-            "confidence": float(predictions[0][highest_probability_index])
+            "transcript": CLASS_MAPPING[predicted_label],  # Return the class name instead of the number
+            "label": int(predicted_label),                # Also include the numerical label
+            "confidence": float(predicted_percentage)     # Ensure confidence is returned as float
         }
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.route("/upload", methods=['POST'])
 def upload_file():
@@ -88,6 +118,7 @@ def upload_file():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
         file.save(file_path)
         result = classify_audio(file_path)
+ 
         return jsonify(result)
 
 
